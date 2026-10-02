@@ -1,0 +1,153 @@
+bounding_box:
+  - - 46.532265322653245
+    - 28.533118335605508
+  - - 48.433084330843315
+    - 30.098722954861913
+capacity:
+  gas:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 10220.0
+    - datetime: '2019-01-01'
+      source: Ember, Yearly electricity data
+      value: 11100.0
+    - datetime: '2020-01-01'
+      source: Ember, Yearly electricity data
+      value: 11650.0
+    - datetime: '2021-01-01'
+      source: Ember, Yearly electricity data
+      value: 11680.0
+    - datetime: '2024-01-01'
+      source: Ember, Yearly electricity data
+      value: 11720.0
+  oil:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 8500.0
+  solar:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 20.0
+    - datetime: '2018-01-01'
+      source: Ember, Yearly electricity data
+      value: 30.0
+    - datetime: '2019-01-01'
+      source: Ember, Yearly electricity data
+      value: 80.0
+    - datetime: '2022-01-01'
+      source: Ember, Yearly electricity data
+      value: 100.0
+  wind:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 0.0
+    - datetime: '2018-01-01'
+      source: Ember, Yearly electricity data
+      value: 10.0
+center_point:
+  - 47.36852773144945
+  - 29.570845645234716
+centroid:
+  - 47.789870743385976
+  - 29.50014299753782
+contributors:
+  - alixunderplatz
+  - nessie2013
+  - consideRatio
+country: KW
+country_name: Kuwait
+currency: KWD
+emissionFactors:
+  direct:
+    unknown:
+      _url: https://www.iea.org/fuels-and-technologies/electricity
+      source: IEA 2019; assumes 62.3% gas, 37.7% oil
+      value: 383.572
+  lifecycle:
+    unknown:
+      _url: https://www.iea.org/fuels-and-technologies/electricity
+      source: IEA 2019; assumes 62.3% gas, 37.7% oil
+      value: 550.3199999999999
+fallbackZoneMixes:
+  powerOriginRatios:
+    - _source: Electricity Maps, 2020 average
+      datetime: '2020-01-01'
+      value:
+        battery discharge: 0.0
+        biomass: 0.0
+        coal: 0.0
+        gas: 0.0
+        geothermal: 0.0
+        hydro: 0.0
+        hydro discharge: 0.0
+        nuclear: 0.0
+        oil: 0.0
+        solar: 0.0
+        unknown: 0.9999999963920968
+        wind: 0.0
+    - _source: Electricity Maps, 2021 average
+      datetime: '2021-01-01'
+      value:
+        battery discharge: 0.0
+        biomass: 0.0
+        coal: 0.0
+        gas: 0.0
+        geothermal: 0.0
+        hydro: 0.0
+        hydro discharge: 0.0
+        nuclear: 0.0
+        oil: 0.0
+        solar: 0.0
+        unknown: 0.9999999967729631
+        wind: 0.0
+    - _source: Electricity Maps, 2022 average
+      datetime: '2022-01-01'
+      value:
+        battery discharge: 0.0
+        biomass: 0.0
+        coal: 0.0
+        gas: 0.0
+        geothermal: 0.0
+        hydro: 0.0
+        hydro discharge: 0.0
+        nuclear: 0.0
+        oil: 0.0
+        solar: 0.0
+        unknown: 0.9999999990496002
+        wind: 0.0
+    - _source: Electricity Maps, 2023 average
+      datetime: '2023-01-01'
+      value:
+        battery discharge: 0.0
+        biomass: 0.0
+        coal: 0.0
+        gas: 0.0
+        geothermal: 0.0
+        hydro: 0.0
+        hydro discharge: 0.0
+        nuclear: 0.0
+        oil: 0.0
+        solar: 0.0
+        unknown: 0.9999999920933934
+        wind: 0.0
+has_day_ahead_price_license: false
+hide_day_ahead_price: false
+isLowCarbon:
+  unknown:
+    source: IEA 2019; assumes 62.3% gas, 37.7% oil
+    value: 0
+isRenewable:
+  unknown:
+    source: IEA 2019; assumes 62.3% gas, 37.7% oil
+    value: 0
+parsers:
+  consumption: KW.fetch_consumption
+  productionCapacity: EMBER.fetch_production_capacity
+region: Asia
+sources:
+  IPCC 2014:
+    link: https://www.ipcc.ch/site/assets/uploads/2018/02/ipcc_wg3_ar5_annex-iii.pdf#page=7
+  National Laboratory of the Rockies:
+    link: https://docs.nrel.gov/docs/fy21osti/80580.pdf
+timezone: Asia/Kuwait
+zone_name: Kuwait

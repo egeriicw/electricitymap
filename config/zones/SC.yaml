@@ -1,0 +1,45 @@
+bounding_box:
+  - - 55.20826687574969
+    - -4.802634091088595
+  - - 55.856329489439965
+    - -4.275717804997701
+capacity:
+  solar:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 0.0
+    - datetime: '2018-01-01'
+      source: Ember, Yearly electricity data
+      value: 10.0
+    - datetime: '2021-01-01'
+      source: Ember, Yearly electricity data
+      value: 20.0
+  unknown:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 100.0
+    - datetime: '2019-01-01'
+      source: Ember, Yearly electricity data
+      value: 110.0
+  wind:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 10.0
+center_point:
+  - 55.46681685600321
+  - -4.57926331668171
+centroid:
+  - 55.55254076336677
+  - -4.510572017234428
+contributors:
+  - VIKTORVAV99
+country: SC
+country_name: Seychelles
+currency: SCR
+has_day_ahead_price_license: false
+hide_day_ahead_price: false
+parsers:
+  productionCapacity: EMBER.fetch_production_capacity
+region: Africa
+timezone: Indian/Mahe
+zone_name: Seychelles

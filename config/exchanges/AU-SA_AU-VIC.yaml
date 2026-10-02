@@ -1,0 +1,9 @@
+capacity:
+  - -820
+  - 750
+lonlat:
+  - 140.965561
+  - -35.784766
+parsers:
+  exchange: AEMO.fetch_exchange
+rotation: 90

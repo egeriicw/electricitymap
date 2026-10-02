@@ -1,0 +1,42 @@
+infrastructure:
+  - changed-files:
+      - any-glob-to-any-file:
+          ['.github/**/*', 'docker-compose.yml', 'parsers.dockerfile', '.dockerignore']
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file: ['uv.lock', 'pyproject.toml']
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file: ['tests/**/*', 'parsers/test/**/*']
+
+javascript:
+  - changed-files:
+      - any-glob-to-any-file: '**/*.js'
+
+python:
+  - changed-files:
+      - any-glob-to-any-file: '**/*.py'
+
+parser:
+  - all:
+      - changed-files:
+          - any-glob-to-any-file: 'parsers/**/*'
+          - all-globs-to-all-files: '!parsers/archive/**/*'
+
+archived parser:
+  - changed-files:
+      - any-glob-to-any-file: 'parsers/archive/**/*'
+
+capacity parser:
+  - changed-files:
+      - any-glob-to-any-file: 'electricitymap/contrib/capacity_parsers/**/*'
+
+exchange config:
+  - changed-files:
+      - any-glob-to-any-file: 'config/exchanges/**/*.yaml'
+
+zone config:
+  - changed-files:
+      - any-glob-to-any-file: 'config/zones/**/*.yaml'

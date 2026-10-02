@@ -1,0 +1,223 @@
+bounding_box:
+  - - -24.53964539645392
+    - 63.39715831213634
+  - - -13.527135271352677
+    - 66.53695404764692
+capacity:
+  biomass:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 0.0
+  hydro:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 1990.0
+    - datetime: '2018-01-01'
+      source: Ember, Yearly electricity data
+      value: 2100.0
+    - datetime: '2020-01-01'
+      source: Ember, Yearly electricity data
+      value: 2110.0
+    - datetime: '2023-01-01'
+      source: Ember, Yearly electricity data
+      value: 2150.0
+    - datetime: '2024-01-01'
+      source: Ember, Yearly electricity data
+      value: 2130.0
+  solar:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 0.0
+    - datetime: '2018-01-01'
+      source: Ember, Yearly electricity data
+      value: 10.0
+  unknown:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 830.0
+    - datetime: '2018-01-01'
+      source: Ember, Yearly electricity data
+      value: 880.0
+    - datetime: '2021-01-01'
+      source: Ember, Yearly electricity data
+      value: 890.0
+    - datetime: '2023-01-01'
+      source: Ember, Yearly electricity data
+      value: 920.0
+    - datetime: '2024-01-01'
+      source: Ember, Yearly electricity data
+      value: 70.0
+  wind:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 0.0
+center_point:
+  - -17.82619692663021
+  - 64.8298913248652
+centroid:
+  - -19.530974414221717
+  - 65.39408488941281
+contributors:
+  - corradio
+  - SNPerkin
+  - nessie2013
+country: IS
+country_name: Iceland
+currency: ISK
+emissionFactors:
+  direct:
+    biomass:
+      datetime: '2021-01-01'
+      source: EU-ETS 2021
+      value: 0.0
+  lifecycle:
+    biomass:
+      datetime: '2014-01-01'
+      source: BEIS 2021; IPCC 2014
+      value: 230.0
+    coal:
+      datetime: '2014-01-01'
+      source: IPCC 2014
+      value: 820.0
+    gas:
+      datetime: '2014-01-01'
+      source: IPCC 2014
+      value: 490.0
+    oil:
+      datetime: '2014-01-01'
+      source: EIA 2020/BEIS 2021; IPCC 2014
+      value: 650.0
+fallbackZoneMixes:
+  powerOriginRatios:
+    - _source: Electricity Maps, 2017 average
+      datetime: '2017-01-01'
+      value:
+        battery discharge: 0.0
+        biomass: 0.0
+        coal: 0.0
+        gas: 0.0
+        geothermal: 0.28098611553654834
+        hydro: 0.7189779502921245
+        hydro discharge: 0.0
+        nuclear: 0.0
+        oil: 3.593417132730596e-05
+        solar: 0.0
+        unknown: 0.0
+        wind: 0.0
+    - _source: Electricity Maps, 2018 average
+      datetime: '2018-01-01'
+      value:
+        battery discharge: 0.0
+        biomass: 0.0
+        coal: 0.0
+        gas: 0.0
+        geothermal: 0.28098611553654834
+        hydro: 0.7189779502921245
+        hydro discharge: 0.0
+        nuclear: 0.0
+        oil: 3.593417132730596e-05
+        solar: 0.0
+        unknown: 0.0
+        wind: 0.0
+    - _source: Electricity Maps, 2019 average
+      datetime: '2019-01-01'
+      value:
+        battery discharge: 0.0
+        biomass: 0.0
+        coal: 0.0
+        gas: 0.0
+        geothermal: 0.30070139247145783
+        hydro: 0.6990214027404852
+        hydro discharge: 0.0
+        nuclear: 0.0
+        oil: 0.0002765598699677303
+        solar: 0.0
+        unknown: 0.0
+        wind: 0.0
+    - _source: Electricity Maps, 2020 average
+      datetime: '2020-01-01'
+      value:
+        battery discharge: 0.0
+        biomass: 0.0
+        coal: 0.0
+        gas: 0.0
+        geothermal: 0.29658338680080415
+        hydro: 0.7033620838853972
+        hydro discharge: 0.0
+        nuclear: 0.0
+        oil: 5.452817213448631e-05
+        solar: 0.0
+        unknown: 0.0
+        wind: 0.0
+    - _source: Electricity Maps, 2021 average
+      datetime: '2021-01-01'
+      value:
+        battery discharge: 0.0
+        biomass: 0.0
+        coal: 0.0
+        gas: 0.0
+        geothermal: 0.27509427664605496
+        hydro: 0.7248819222166444
+        hydro discharge: 0.0
+        nuclear: 0.0
+        oil: 2.382154167634375e-05
+        solar: 0.0
+        unknown: 0.0
+        wind: 0.0
+    - _source: Electricity Maps, 2022 average
+      datetime: '2022-01-01'
+      value:
+        battery discharge: 0.0
+        biomass: 0.0
+        coal: 0.0
+        gas: 0.0
+        geothermal: 0.24455822144176287
+        hydro: 0.7553568516765476
+        hydro discharge: 0.0
+        nuclear: 0.0
+        oil: 8.497249532180886e-05
+        solar: 0.0
+        unknown: 0.0
+        wind: 0.0
+    - _source: Electricity Maps, 2023 average
+      datetime: '2023-01-01'
+      value:
+        battery discharge: 0.0
+        biomass: 0.0
+        coal: 0.0
+        gas: 0.0
+        geothermal: 0.2761102981801818
+        hydro: 0.7238896822920312
+        hydro discharge: 0.0
+        nuclear: 0.0
+        oil: 0.0
+        solar: 0.0
+        unknown: 0.0
+        wind: 0.0
+    - _source: Electricity Maps, 2024 average
+      datetime: '2024-01-01'
+      value:
+        battery discharge: 0.0
+        biomass: 0.0
+        coal: 0.0
+        gas: 0.0
+        geothermal: 0.29750889698499444
+        hydro: 0.7024910885022445
+        hydro discharge: 0.0
+        nuclear: 0.0
+        oil: 3.2250580075461655e-09
+        solar: 0.0
+        unknown: 0.0
+        wind: 0.0
+has_day_ahead_price_license: false
+hide_day_ahead_price: false
+parsers:
+  consumption: ENTSOE.fetch_consumption
+  production: amper_landsnet.fetch_production
+  productionCapacity: EMBER.fetch_production_capacity
+region: Europe
+sources:
+  IPCC 2014:
+    link: https://www.ipcc.ch/site/assets/uploads/2018/02/ipcc_wg3_ar5_annex-iii.pdf#page=7
+timezone: Atlantic/Reykjavik
+zone_name: Iceland

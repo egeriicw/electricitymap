@@ -3,14 +3,10 @@
 *.json
 *secrets*
 *.env
+*.mp4
+*.mkv
 
-mobileapp
 
 datascience
-
-web/node_modules
-web/build
-web/public/dist
-web/world_*.json
 
 screenshots*

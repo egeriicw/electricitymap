@@ -1,0 +1,22 @@
+# Files and paths to ignore
+
+.prettierignore
+pnpm-lock.yaml
+.earthlyignore
+
+.venv
+**/parsers/tests/mocks
+.pytest_cache/
+
+.github/ISSUE_TEMPLATE/
+
+LICENSE.md
+LICENSE
+
+node_modules
+.DS_Store
+.eslintcache
+coverage
+.nyc_output
+cypress/videos
+cypress/screenshots

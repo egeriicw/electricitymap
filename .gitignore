@@ -1,8 +1,7 @@
+gha-creds-*.json
 *.pyc
 *.env
-src
-web/public/dist
-web/node_modules
+**/node_modules
 .ipynb_checkpoints/
 *.pyproj
 *.sln
@@ -13,8 +12,14 @@ web/node_modules
 *.publishproj
 .DS_Store
 /.vs
+/.venv
 Thumbs.db
-mobileapp/*.zip
+dist
+parsers/.venv
+
+# Ignore top level vscode folder as it is symlinked
+#.vscode
+.vscode/launch.json
 
 ## Pycharm IDE
 .idea

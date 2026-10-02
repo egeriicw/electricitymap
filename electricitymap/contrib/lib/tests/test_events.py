@@ -1,0 +1,1508 @@
+import logging
+import math
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
+
+import freezegun
+import numpy as np
+import pytest
+
+from electricitymap.contrib.config.constants import PRODUCTION_MODES, STORAGE_MODES
+from electricitymap.contrib.lib.models.events import (
+    DayAheadPrice,
+    EventSourceType,
+    Exchange,
+    ExchangeCapacity,
+    GridAlert,
+    GridAlertType,
+    LocationalMarginalPrice,
+    Price,
+    ProductionBreakdown,
+    ProductionMix,
+    ScheduledExchange,
+    StorageMix,
+    TotalConsumption,
+    TotalProduction,
+)
+from electricitymap.contrib.types import DayAheadAuction, MarketAgreementType, ZoneKey
+
+
+def test_create_exchange():
+    exchange = Exchange(
+        zoneKey=ZoneKey("AT->DE"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        netFlow=1,
+        source="trust.me",
+    )
+    assert exchange.zoneKey == ZoneKey("AT->DE")
+    assert exchange.datetime == datetime(2023, 1, 1, tzinfo=timezone.utc)
+    assert exchange.netFlow == 1
+    assert exchange.source == "trust.me"
+
+    exchange = Exchange(
+        zoneKey=ZoneKey("AT->DE"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        netFlow=-1,
+        source="trust.me",
+    )
+    assert exchange.netFlow == -1
+
+
+def test_raises_if_invalid_exchange():
+    # This should raise a ValueError because the netFlow is None.
+    with pytest.raises(ValueError):
+        Exchange(
+            zoneKey=ZoneKey("AT->DE"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            netFlow=None,
+            source="trust.me",
+        )
+
+    # This should raise a ValueError because the netFlow is NaN.
+    with pytest.raises(ValueError):
+        Exchange(
+            zoneKey=ZoneKey("AT->DE"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            netFlow=math.nan,
+            source="trust.me",
+        )
+
+    # This should raise a ValueError because the netFlow is Nan using Numpy.
+    with pytest.raises(ValueError):
+        Exchange(
+            zoneKey=ZoneKey("AT->DE"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            netFlow=np.nan,
+            source="trust.me",
+        )
+
+    # This should raise a ValueError because the timezone is missing.
+    with pytest.raises(ValueError):
+        Exchange(
+            zoneKey=ZoneKey("AT->DE"),
+            datetime=datetime(2023, 1, 1),
+            netFlow=1,
+            source="trust.me",
+        )
+
+    # This should raise a ValueError because the zoneKey is not an Exchange
+    with pytest.raises(ValueError):
+        Exchange(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            netFlow=1,
+            source="trust.me",
+        )
+
+    with pytest.raises(ValueError):
+        Exchange(
+            zoneKey=ZoneKey("AT-DE"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            netFlow=1,
+            source="trust.me",
+        )
+
+    with pytest.raises(ValueError):
+        Exchange(
+            zoneKey=ZoneKey("UNKNOWN->UNKNOWN"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            netFlow=1,
+            source="trust.me",
+        )
+
+    with pytest.raises(ValueError):
+        Exchange(
+            zoneKey=ZoneKey("DE->AT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            netFlow=1,
+            source="trust.me",
+        )
+
+
+def test_exchange_static_create_logs_error():
+    logger = logging.Logger("test")
+    with patch.object(logger, "error") as mock_error:
+        Exchange.create(
+            logger=logger,
+            zoneKey=ZoneKey("DER->FR"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_datetime=None,
+            netFlow=-1,
+            source="trust.me",
+        )
+        mock_error.assert_called_once()
+
+
+def test_update_exchange():
+    exchange = Exchange(
+        zoneKey=ZoneKey("AT->DE"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        netFlow=1,
+        source="trust.me",
+    )
+    new_exchange = Exchange(
+        zoneKey=ZoneKey("AT->DE"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        netFlow=2,
+        source="trust.me",
+    )
+    final_exchange = Exchange._update(exchange, new_exchange)
+    assert final_exchange is not None
+    assert final_exchange.netFlow == 2
+    assert final_exchange.zoneKey == ZoneKey("AT->DE")
+    assert final_exchange.datetime == datetime(2023, 1, 1, tzinfo=timezone.utc)
+    assert final_exchange.source == "trust.me"
+
+
+def test_create_scheduled_exchange_derives_net_flow():
+    # At native 15-min resolution only one direction clears, so the other
+    # column is 0 and netFlow equals the single directional value.
+    exchange = ScheduledExchange.create(
+        logger=logging.getLogger(),
+        zoneKey=ZoneKey("AT->DE"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        end_datetime=None,
+        source="trust.me",
+        scheduledExport=250.0,
+        scheduledImport=0.0,
+        marketAgreementType=MarketAgreementType.DAY_AHEAD,
+    )
+    assert exchange is not None
+    assert exchange.scheduledExport == 250.0
+    assert exchange.scheduledImport == 0.0
+    # netFlow is derived from scheduledExport - scheduledImport, positive when zone1 exports.
+    assert exchange.netFlow == 250.0
+    assert exchange.marketAgreementType == MarketAgreementType.DAY_AHEAD
+    # sourceType defaults to published for TSO ex-ante schedules.
+    assert exchange.sourceType == EventSourceType.published
+
+
+def test_scheduled_exchange_preserves_both_directions_when_hourly_aggregated():
+    # An hourly bucket can contain 15-min MTUs that cleared in opposite
+    # directions, leaving both gross totals positive. Both must survive; the
+    # signed netFlow alone would lose the gross flows.
+    exchange = ScheduledExchange.create(
+        logger=logging.getLogger(),
+        zoneKey=ZoneKey("AT->DE"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        end_datetime=datetime(2023, 1, 1, 1, tzinfo=timezone.utc),
+        source="trust.me",
+        scheduledExport=100.0,
+        scheduledImport=80.0,
+        marketAgreementType=MarketAgreementType.TOTAL,
+    )
+    assert exchange is not None
+    assert exchange.scheduledExport == 100.0
+    assert exchange.scheduledImport == 80.0
+    assert exchange.netFlow == 20.0
+
+    as_dict = exchange.to_dict()
+    # to_dict exposes both gross directions and keeps netFlow (= scheduledExport -
+    # scheduledImport) for backward compatibility.
+    assert as_dict["scheduledExport"] == 100.0
+    assert as_dict["scheduledImport"] == 80.0
+    assert as_dict["netFlow"] == 20.0
+    assert as_dict["marketAgreementType"] == MarketAgreementType.TOTAL
+
+
+def test_scheduled_exchange_static_create_logs_error():
+    logger = logging.getLogger()
+    with patch.object(logger, "error") as mock_error:
+        # A None direction is invalid and must be caught, returning None.
+        exchange = ScheduledExchange.create(
+            logger=logger,
+            zoneKey=ZoneKey("AT->DE"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_datetime=None,
+            source="trust.me",
+            scheduledExport=None,
+            scheduledImport=None,
+            marketAgreementType=MarketAgreementType.DAY_AHEAD,
+        )
+        assert exchange is None
+        mock_error.assert_called_once()
+
+
+def test_update_total_production():
+    production = TotalProduction(
+        zoneKey=ZoneKey("IT-SO"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        value=100,
+        source="entsoe",
+    )
+    new_production = TotalProduction(
+        zoneKey=ZoneKey("IT-SO"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        value=150,
+        source="entsoe",
+    )
+
+    updated = TotalProduction._update(production, new_production)
+
+    assert updated.value == 150
+    assert updated.zoneKey == ZoneKey("IT-SO")
+    assert updated.sourceType == EventSourceType.measured
+
+
+def test_update_total_consumption_raises_on_mismatched_zone():
+    consumption = TotalConsumption(
+        zoneKey=ZoneKey("DE"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        consumption=100,
+        source="entsoe",
+    )
+    new_consumption = TotalConsumption(
+        zoneKey=ZoneKey("AT"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        consumption=120,
+        source="entsoe",
+    )
+
+    with pytest.raises(ValueError):
+        TotalConsumption._update(consumption, new_consumption)
+
+
+def test_create_consumption():
+    consumption = TotalConsumption(
+        zoneKey=ZoneKey("DE"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        consumption=1,
+        source="trust.me",
+    )
+    assert consumption.zoneKey == ZoneKey("DE")
+    assert consumption.datetime == datetime(2023, 1, 1, tzinfo=timezone.utc)
+    assert consumption.consumption == 1
+    assert consumption.source == "trust.me"
+
+
+def test_raises_if_invalid_consumption():
+    # This should raise a ValueError because the consumption is None.
+    with pytest.raises(ValueError):
+        TotalConsumption(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            consumption=None,
+            source="trust.me",
+        )
+
+    # This should raise a ValueError because the consumption is NaN.
+    with pytest.raises(ValueError):
+        TotalConsumption(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            consumption=math.nan,
+            source="trust.me",
+        )
+
+    # This should raise a ValueError because the consumption is Nan using Numpy.
+    with pytest.raises(ValueError):
+        TotalConsumption(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            consumption=math.nan,
+            source="trust.me",
+        )
+
+    with pytest.raises(ValueError):
+        TotalConsumption(
+            zoneKey=ZoneKey("ATT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            consumption=1,
+            source="trust.me",
+        )
+    with pytest.raises(ValueError):
+        TotalConsumption(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1),
+            consumption=1,
+            source="trust.me",
+        )
+    with pytest.raises(ValueError):
+        TotalConsumption(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            consumption=-1,
+            source="trust.me",
+        )
+
+
+def test_static_create_logs_error():
+    logger = logging.Logger("test")
+    with patch.object(logger, "error") as mock_error:
+        TotalConsumption.create(
+            logger=logger,
+            zoneKey=ZoneKey("DE"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_datetime=None,
+            consumption=-1,
+            source="trust.me",
+        )
+        mock_error.assert_called_once()
+
+
+def test_create_price():
+    price = Price(
+        zoneKey=ZoneKey("DE"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        price=1,
+        source="trust.me",
+        currency="EUR",
+    )
+    assert price.zoneKey == ZoneKey("DE")
+    assert price.datetime == datetime(2023, 1, 1, tzinfo=timezone.utc)
+    assert price.price == 1
+    assert price.source == "trust.me"
+    assert price.currency == "EUR"
+
+
+def test_invalid_price_raises():
+    # This should raise a ValueError because the price is None.
+    with pytest.raises(ValueError):
+        Price(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            price=None,
+            source="trust.me",
+            currency="EUR",
+        )
+
+    # This should raise a ValueError because the price is NaN.
+    with pytest.raises(ValueError):
+        Price(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            price=math.nan,
+            source="trust.me",
+            currency="EUR",
+        )
+
+    # This should raise a ValueError because the price is Nan using Numpy.
+    with pytest.raises(ValueError):
+        Price(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            price=math.nan,
+            source="trust.me",
+            currency="EUR",
+        )
+
+    with pytest.raises(ValueError):
+        Price(
+            zoneKey=ZoneKey("ATT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            price=1,
+            source="trust.me",
+            currency="EUR",
+        )
+    with pytest.raises(ValueError):
+        Price(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1),
+            price=1,
+            source="trust.me",
+            currency="EUR",
+        )
+    with pytest.raises(ValueError):
+        Price(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            price=1,
+            source="trust.me",
+            currency="EURO",
+        )
+
+
+@freezegun.freeze_time("2023-01-01")
+def test_prices_can_be_in_future():
+    Price(
+        zoneKey=ZoneKey("DE"),
+        datetime=datetime(2023, 1, 2, tzinfo=timezone.utc),
+        price=1,
+        source="trust.me",
+        currency="EUR",
+    )
+
+
+def _day_ahead_price(**overrides) -> DayAheadPrice:
+    fields = {
+        "zoneKey": ZoneKey("DE"),
+        "datetime": datetime(2026, 10, 1, tzinfo=timezone.utc),
+        "end_datetime": datetime(2026, 10, 1, 1, tzinfo=timezone.utc),
+        "price": 1,
+        "source": "trust.me",
+        "currency": "EUR",
+        "auction": DayAheadAuction.SDAC,
+    }
+    return DayAheadPrice(**{**fields, **overrides})
+
+
+def test_create_day_ahead_price():
+    price = _day_ahead_price(publishedAt=datetime(2026, 9, 30, 11, tzinfo=timezone.utc))
+    assert price.to_dict() == {
+        "datetime": datetime(2026, 10, 1, tzinfo=timezone.utc),
+        "end_datetime": datetime(2026, 10, 1, 1, tzinfo=timezone.utc),
+        "zoneKey": ZoneKey("DE"),
+        "auction": DayAheadAuction.SDAC,
+        "currency": "EUR",
+        "price": 1,
+        "source": "trust.me",
+        "sourceType": EventSourceType.published,
+        "publishedAt": datetime(2026, 9, 30, 11, tzinfo=timezone.utc),
+    }
+
+
+def test_day_ahead_price_published_at_is_optional():
+    assert _day_ahead_price().publishedAt is None
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"publishedAt": datetime(2026, 9, 30, 11)},  # Naive.
+        {"price": None},
+        {"price": math.nan},
+        {"auction": "NOT_AN_AUCTION"},
+    ],
+)
+def test_invalid_day_ahead_price_raises(overrides):
+    with pytest.raises(ValueError):
+        _day_ahead_price(**overrides)
+
+
+def test_day_ahead_price_requires_auction():
+    with pytest.raises(ValueError):
+        DayAheadPrice(
+            zoneKey=ZoneKey("DE"),
+            datetime=datetime(2026, 10, 1, tzinfo=timezone.utc),
+            price=1,
+            source="trust.me",
+            currency="EUR",
+        )
+
+
+@freezegun.freeze_time("2026-10-01")
+def test_day_ahead_price_can_be_in_future():
+    _day_ahead_price(
+        datetime=datetime(2026, 10, 5, tzinfo=timezone.utc),
+        end_datetime=datetime(2026, 10, 5, 1, tzinfo=timezone.utc),
+    )
+
+
+def test_day_ahead_price_timestamps_are_converted_to_utc():
+    tokyo = ZoneInfo("Asia/Tokyo")
+    price = _day_ahead_price(
+        datetime=datetime(2026, 10, 1, 9, tzinfo=tokyo),
+        end_datetime=datetime(2026, 10, 1, 9, 30, tzinfo=tokyo),
+        publishedAt=datetime(2026, 9, 30, 17, 5, tzinfo=tokyo),
+    )
+    assert price.datetime == datetime(2026, 10, 1, 0, tzinfo=timezone.utc)
+    assert price.end_datetime == datetime(2026, 10, 1, 0, 30, tzinfo=timezone.utc)
+    assert price.publishedAt == datetime(2026, 9, 30, 8, 5, tzinfo=timezone.utc)
+    for value in (price.datetime, price.end_datetime, price.publishedAt):
+        assert value.tzinfo == timezone.utc
+
+
+def test_create_day_ahead_price_logs_error():
+    logger = logging.getLogger("test")
+    with patch.object(logger, "error") as mock_error:
+        price = DayAheadPrice.create(
+            logger=logger,
+            zoneKey=ZoneKey("DE"),
+            datetime=datetime(2026, 10, 1, tzinfo=timezone.utc),
+            end_datetime=None,
+            source="trust.me",
+            price=None,
+            currency="EUR",
+            auction=DayAheadAuction.SDAC,
+        )
+    assert price is None
+    mock_error.assert_called_once()
+
+
+def test_create_locational_marginal_price():
+    lmp = LocationalMarginalPrice(
+        zoneKey=ZoneKey("US-CENT-SWPP"),
+        datetime=datetime(2025, 3, 1, tzinfo=timezone.utc),
+        price=1,
+        source="trust.me",
+        currency="USD",
+        node="SPPNORTH_HUB",
+    )
+    assert lmp.zoneKey == ZoneKey("US-CENT-SWPP")
+    assert lmp.datetime == datetime(2025, 3, 1, tzinfo=timezone.utc)
+    assert lmp.price == 1
+    assert lmp.source == "trust.me"
+    assert lmp.currency == "USD"
+    assert lmp.node == "SPPNORTH_HUB"
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        "",  # Empty string
+        None,  # None value
+        " ",  # Space only
+        "\t",  # Tab only
+        "\n",  # Newline only
+        "   ",  # Multiple spaces
+        " \t\n ",  # Mixed whitespace
+        "\tSPPNORTH_HUB",  # Leading whitespace
+        "SPPNORTH_HUB\t",  # Trailing whitespace
+    ],
+)
+def test_invalid_locational_marginal_price_node_raises(node):
+    # This should raise a ValueError because the node is a empty string.
+    with pytest.raises(ValueError):
+        LocationalMarginalPrice(
+            zoneKey=ZoneKey("US-CENT-SWPP"),
+            datetime=datetime(2025, 3, 1, tzinfo=timezone.utc),
+            price=1,
+            source="trust.me",
+            currency="USD",
+            node=node,
+        )
+
+
+def test_create_grid_alerts():
+    grid_alert = GridAlert.create(
+        logger=logging.Logger("test"),
+        zoneKey=ZoneKey("US-MIDA-PJM"),
+        locationRegion="Test Region",
+        source="trust.me",
+        alertType=GridAlertType.action,
+        message="This is a test message",
+        issuedTime=datetime(2025, 3, 1, tzinfo=timezone.utc),
+        startTime=None,
+        endTime=None,
+    )
+    assert grid_alert is not None
+    assert grid_alert.zoneKey == ZoneKey("US-MIDA-PJM")
+    assert grid_alert.locationRegion == "Test Region"
+    assert grid_alert.source == "trust.me"
+    assert grid_alert.alertType == GridAlertType.action
+    assert grid_alert.message == "This is a test message"
+    assert grid_alert.issuedTime == datetime(2025, 3, 1, tzinfo=timezone.utc)
+    assert grid_alert.startTime == grid_alert.issuedTime  # because of the default
+    assert grid_alert.endTime is None
+
+
+def test_invalid_message_raises():
+    # This should raise a ValueError because empty message
+    with pytest.raises(ValueError):
+        GridAlert(
+            logger=logging.Logger("test"),
+            zoneKey=ZoneKey("US-MIDA-PJM"),
+            locationRegion=None,
+            source="trust.me",
+            alertType=GridAlertType.action,
+            message="",
+            issuedTime=datetime(2025, 3, 1, tzinfo=timezone.utc),
+            startTime=None,
+            endTime=None,
+        )
+
+
+def test_create_production_breakdown():
+    mix = ProductionMix(wind=10)
+    breakdown = ProductionBreakdown(
+        zoneKey=ZoneKey("DE"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        production=mix,
+        source="trust.me",
+    )
+    assert breakdown.zoneKey == ZoneKey("DE")
+    assert breakdown.datetime == datetime(2023, 1, 1, tzinfo=timezone.utc)
+    assert breakdown.production is not None
+    assert breakdown.production.wind == 10
+    assert breakdown.source == "trust.me"
+
+
+def test_create_production_breakdown_with_storage():
+    mix = ProductionMix(
+        wind=10,
+        hydro=20,
+    )
+    storage = StorageMix(
+        hydro=10,
+    )
+    breakdown = ProductionBreakdown(
+        zoneKey=ZoneKey("DE"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        production=mix,
+        storage=storage,
+        source="trust.me",
+    )
+
+    assert breakdown.production is not None
+    assert breakdown.production.hydro == 20
+    assert breakdown.storage is not None
+    assert breakdown.storage.hydro == 10
+
+
+def test_invalid_breakdown_raises():
+    mix = ProductionMix(
+        wind=10,
+        hydro=20,
+    )
+    storage = StorageMix(
+        hydro=10,
+    )
+    with pytest.raises(ValueError):
+        ProductionBreakdown(
+            zoneKey=ZoneKey("ATT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            production=mix,
+            source="trust.me",
+        )
+    with pytest.raises(ValueError):
+        ProductionBreakdown(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1),
+            production=mix,
+            source="trust.me",
+        )
+    with pytest.raises(ValueError):
+        ProductionBreakdown(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            production=ProductionMix(wind=None),
+            storage=storage,
+            source="trust.me",
+        )
+
+
+def test_negative_production_gets_corrected():
+    mix = ProductionMix(
+        wind=10,
+        hydro=-20,
+    )
+    logger = logging.Logger("test")
+    with patch.object(logger, "debug") as mock_logger:
+        breakdown = ProductionBreakdown.create(
+            logger=logger,
+            zoneKey=ZoneKey("DE"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_datetime=None,
+            production=mix,
+            source="trust.me",
+        )
+        mock_logger.assert_called_once()
+        assert breakdown is not None
+        assert breakdown.production is not None
+        assert breakdown.production.hydro is None
+        assert breakdown.production.wind == 10
+
+        dict_form = breakdown.to_dict()
+        assert dict_form["production"]["wind"] == 10
+        assert dict_form["production"]["hydro"] is None
+
+
+def test_self_report_negative_value():
+    mix = ProductionMix()
+    # We have manually set a 0 to avoid reporting self consumption for instance.
+    mix.add_value("wind", 0)
+    # This one has been set through the attributes and should be reported as None.
+    mix.biomass = -10
+    logger = logging.Logger("test")
+    with patch.object(logger, "debug") as mock_logger:
+        breakdown = ProductionBreakdown.create(
+            logger=logger,
+            zoneKey=ZoneKey("DE"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_datetime=None,
+            production=mix,
+            source="trust.me",
+        )
+        mock_logger.assert_called_once()
+        assert breakdown is not None
+        assert breakdown.production is not None
+        assert breakdown.production.wind == 0
+        assert breakdown.production.biomass is None
+
+
+def test_unknown_production_mode_raises():
+    mix = ProductionMix()
+    with pytest.raises(AttributeError):
+        mix.add_value("nuke", 10)
+    with pytest.raises(AttributeError):
+        mix.nuke = 10
+    storage = StorageMix()
+    with pytest.raises(AttributeError):
+        storage.add_value("nuke", 10)
+    with pytest.raises(AttributeError):
+        storage.nuke = 10
+
+
+@freezegun.freeze_time("2023-01-01")
+def test_forecasted_points():
+    mix = ProductionMix(wind=10)
+    breakdown = ProductionBreakdown(
+        zoneKey=ZoneKey("DE"),
+        datetime=datetime(2023, 2, 1, tzinfo=timezone.utc),
+        production=mix,
+        source="trust.me",
+        sourceType=EventSourceType.forecasted,
+    )
+    assert breakdown.zoneKey == ZoneKey("DE")
+    assert breakdown.datetime == datetime(2023, 2, 1, tzinfo=timezone.utc)
+    assert breakdown.production is not None
+    assert breakdown.production.wind == 10
+    assert breakdown.source == "trust.me"
+    assert breakdown.sourceType == EventSourceType.forecasted
+
+
+@freezegun.freeze_time("2023-01-01")
+def test_non_forecasted_points_in_future():
+    mix = ProductionMix(wind=10)
+    with pytest.raises(ValueError):
+        _breakdown = ProductionBreakdown(
+            zoneKey=ZoneKey("DE"),
+            datetime=datetime(2023, 3, 1, tzinfo=timezone.utc),
+            production=mix,
+            source="trust.me",
+        )
+
+
+@freezegun.freeze_time("2023-01-01")
+def test_non_forecasted_point_with_timezone_forward():
+    """Test that points in a timezone that is ahead of UTC are accepted."""
+    mix = ProductionMix(wind=10)
+    breakdown = ProductionBreakdown(
+        zoneKey=ZoneKey("DE"),
+        datetime=datetime(2023, 1, 1, 5, tzinfo=ZoneInfo("Asia/Tokyo")),
+        production=mix,
+        source="trust.me",
+    )
+    assert breakdown.datetime == datetime(2023, 1, 1, 5, tzinfo=ZoneInfo("Asia/Tokyo"))
+
+
+def test_end_datetime_must_be_after_datetime():
+    start = datetime(2023, 1, 1, 12, 0, tzinfo=timezone.utc)
+
+    # Strictly after start is accepted and truncated to whole minutes.
+    exchange = Exchange(
+        zoneKey=ZoneKey("DK-DK1->DK-DK2"),
+        datetime=start,
+        end_datetime=datetime(2023, 1, 1, 13, 0, 45, tzinfo=timezone.utc),
+        netFlow=1,
+        source="trust.me",
+    )
+    assert exchange.end_datetime == datetime(2023, 1, 1, 13, 0, tzinfo=timezone.utc)
+
+    # None is allowed.
+    assert (
+        Exchange(
+            zoneKey=ZoneKey("DK-DK1->DK-DK2"),
+            datetime=start,
+            netFlow=1,
+            source="trust.me",
+        ).end_datetime
+        is None
+    )
+
+    # Equal to start is rejected (interval must have positive duration).
+    with pytest.raises(ValueError):
+        Exchange(
+            zoneKey=ZoneKey("DK-DK1->DK-DK2"),
+            datetime=start,
+            end_datetime=start,
+            netFlow=1,
+            source="trust.me",
+        )
+
+    # Before start is rejected.
+    with pytest.raises(ValueError):
+        Exchange(
+            zoneKey=ZoneKey("DK-DK1->DK-DK2"),
+            datetime=start,
+            end_datetime=datetime(2023, 1, 1, 11, 0, tzinfo=timezone.utc),
+            netFlow=1,
+            source="trust.me",
+        )
+
+    # Naive end_datetime is rejected.
+    with pytest.raises(ValueError):
+        Exchange(
+            zoneKey=ZoneKey("DK-DK1->DK-DK2"),
+            datetime=start,
+            end_datetime=datetime(2023, 1, 1, 13, 0),
+            netFlow=1,
+            source="trust.me",
+        )
+
+
+def test_aggregate_takes_earliest_known_end_datetime():
+    # Sub-zones can report at different resolutions or without an end_datetime;
+    # aggregation keeps the earliest known end instead of failing.
+    dt = datetime(2023, 1, 1, tzinfo=timezone.utc)
+
+    def breakdown(source: str, end_datetime: datetime | None) -> ProductionBreakdown:
+        return ProductionBreakdown(
+            zoneKey=ZoneKey("DE"),
+            datetime=dt,
+            end_datetime=end_datetime,
+            production=ProductionMix(wind=10),
+            source=source,
+        )
+
+    quarter_hourly = breakdown("a", dt + timedelta(minutes=15))
+    hourly = breakdown("b", dt + timedelta(hours=1))
+    unknown = breakdown("c", None)
+
+    assert ProductionBreakdown.aggregate(
+        [quarter_hourly, hourly]
+    ).end_datetime == dt + timedelta(minutes=15)
+    assert ProductionBreakdown.aggregate(
+        [hourly, unknown]
+    ).end_datetime == dt + timedelta(hours=1)
+    assert ProductionBreakdown.aggregate([unknown, unknown]).end_datetime is None
+
+
+def test_static_create_logs_error_with_none():
+    logger = logging.Logger("test")
+    with patch.object(logger, "error") as mock_error:
+        ProductionBreakdown.create(
+            logger=logger,
+            zoneKey=ZoneKey("DE"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_datetime=None,
+            production=ProductionMix(wind=None),
+            source="trust.me",
+        )
+        mock_error.assert_called_once()
+
+
+def test_static_create_logs_with_nan():
+    logger = logging.Logger("test")
+    with patch.object(logger, "error") as mock_error:
+        ProductionBreakdown.create(
+            logger=logger,
+            zoneKey=ZoneKey("DE"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_datetime=None,
+            production=ProductionMix(wind=math.nan),
+            source="trust.me",
+        )
+        mock_error.assert_called_once()
+
+
+def test_static_create_logs_with_nan_using_numpy():
+    logger = logging.Logger("test")
+    with patch.object(logger, "error") as mock_error:
+        ProductionBreakdown.create(
+            logger=logger,
+            zoneKey=ZoneKey("DE"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_datetime=None,
+            production=ProductionMix(wind=np.nan),
+            source="trust.me",
+        )
+        mock_error.assert_called_once()
+
+
+def test_set_breakdown_all_present():
+    breakdown = ProductionBreakdown(
+        zoneKey=ZoneKey("DE"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        production=ProductionMix(wind=10, solar=None),
+        source="trust.me",
+    )
+    dict_form = breakdown.to_dict()
+    assert dict_form["production"].keys() == {"wind", "solar"}
+    assert dict_form["production"]["wind"] == 10
+    assert dict_form["production"]["solar"] is None
+
+
+def test_set_modes_all_present_add_mode():
+    mix = ProductionMix(wind=10)
+    mix.add_value("solar", None)
+    breakdown = ProductionBreakdown(
+        zoneKey=ZoneKey("DE"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        production=mix,
+        source="trust.me",
+    )
+    dict_form = breakdown.to_dict()
+    assert dict_form["production"].keys() == {"wind", "solar"}
+    assert dict_form["production"]["wind"] == 10
+    assert dict_form["production"]["solar"] is None
+
+
+def test_create_generation():
+    generation = TotalProduction(
+        zoneKey=ZoneKey("DE"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        source="trust.me",
+        value=1,
+    )
+    assert generation.zoneKey == ZoneKey("DE")
+    assert generation.datetime == datetime(2023, 1, 1, tzinfo=timezone.utc)
+    assert generation.source == "trust.me"
+    assert generation.value == 1
+
+
+def test_total_production_static_create_logs_error():
+    logger = logging.Logger("test")
+    with patch.object(logger, "error") as mock_error:
+        TotalProduction.create(
+            logger=logger,
+            zoneKey=ZoneKey("DE"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_datetime=None,
+            value=-1,
+            source="trust.me",
+        )
+        mock_error.assert_called_once()
+
+
+def test_raises_if_invalid_generation():
+    # This should raise a ValueError because the generation is None.
+    with pytest.raises(ValueError):
+        TotalProduction(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            value=None,
+            source="trust.me",
+        )
+
+    # This should raise a ValueError because the generation is NaN.
+    with pytest.raises(ValueError):
+        TotalProduction(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            value=math.nan,
+            source="trust.me",
+        )
+
+    # This should raise a ValueError because the generation is Nan using Numpy.
+    with pytest.raises(ValueError):
+        TotalProduction(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            value=np.nan,
+            source="trust.me",
+        )
+
+    # This should raise a ValueError because the timezone is missing.
+    with pytest.raises(ValueError):
+        TotalProduction(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1),
+            value=1,
+            source="trust.me",
+        )
+
+    # This should raise a ValueError because the zoneKey is not a ZoneKey.
+    with pytest.raises(ValueError):
+        TotalProduction(
+            zoneKey=ZoneKey("ATT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            value=1,
+            source="trust.me",
+        )
+
+    # This should raise a ValueError because the value is negative.
+    with pytest.raises(ValueError):
+        TotalProduction(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            value=-1,
+            source="trust.me",
+        )
+
+
+def test_production_mix_has_all_production_modes():
+    mix = ProductionMix()
+    for mode in PRODUCTION_MODES:
+        assert hasattr(mix, mode)
+
+
+def test_storage_mix_has_all_storage_modes():
+    mix = StorageMix()
+    for mode in STORAGE_MODES:
+        assert hasattr(mix, mode)
+
+
+def test_set_attr():
+    mix = ProductionMix()
+    mix.wind = 10
+    assert mix.wind == 10
+
+
+def test_set_attr_with_negative_value():
+    mix = ProductionMix()
+    mix.wind = -10
+    assert mix.wind is None
+
+
+def test_set_attr_with_none():
+    mix = ProductionMix()
+    mix.wind = None
+    assert mix.wind is None
+
+
+def test_set_attr_with_invalid_mode():
+    mix = ProductionMix()
+    with pytest.raises(AttributeError):
+        mix.nuke = 10
+
+
+def test_set_item():
+    mix = ProductionMix()
+    mix["wind"] = 10
+    assert mix.wind == 10
+
+
+def test_set_item_with_negative_value():
+    mix = ProductionMix()
+    mix["wind"] = -10
+    assert mix.wind is None
+
+
+def test_set_item_with_none():
+    mix = ProductionMix()
+    mix["wind"] = None
+    assert mix.wind is None
+
+
+def test_set_item_with_invalid_mode():
+    mix = ProductionMix()
+    with pytest.raises(AttributeError):
+        mix["nuke"] = 10
+
+
+def test_set_attr_storage():
+    mix = StorageMix()
+    mix.hydro = 10
+    assert mix.hydro == 10
+
+
+def test_set_attr_storage_with_negative_value():
+    mix = StorageMix()
+    mix.hydro = -10
+    assert mix.hydro == -10
+
+
+def test_set_attr_storage_with_none():
+    mix = StorageMix()
+    mix.hydro = None
+    assert mix.hydro is None
+
+
+def test_set_attr_storage_with_invalid_mode():
+    mix = StorageMix()
+    with pytest.raises(AttributeError):
+        mix.nuke = 10
+
+
+def test_set_item_storage():
+    mix = StorageMix()
+    mix["hydro"] = 10
+    assert mix.hydro == 10
+
+
+def test_set_item_storage_with_negative_value():
+    mix = StorageMix()
+    mix["hydro"] = -10
+    assert mix.hydro == -10
+
+
+def test_set_item_storage_with_none():
+    mix = StorageMix()
+    mix["hydro"] = None
+    assert mix.hydro is None
+
+
+def test_set_item_storage_with_invalid_mode():
+    mix = StorageMix()
+    with pytest.raises(AttributeError):
+        mix["nuke"] = 10
+
+
+def test_production():
+    mix = ProductionMix()
+    mix.add_value("wind", 10)
+    assert mix.wind == 10
+    mix.add_value("wind", 5)
+    assert mix.wind == 15
+    assert mix.corrected_negative_modes == set()
+
+
+def test_production_with_negative_value():
+    mix = ProductionMix()
+    mix.add_value("wind", 10)
+    assert mix.wind == 10
+    mix.add_value("wind", -5)
+    assert mix.wind == 10
+    assert mix.corrected_negative_modes == {"wind"}
+
+
+def test_production_with_negative_value_expect_none():
+    mix = ProductionMix()
+    mix.add_value("wind", -10)
+    assert mix.wind is None
+    assert mix.corrected_negative_modes == {"wind"}
+
+
+def test_production_with_negative_value_and_correct_with_none():
+    mix = ProductionMix()
+    mix.add_value("wind", -10, correct_negative_with_zero=True)
+    assert mix.wind == 0
+    mix.add_value("wind", 15, correct_negative_with_zero=True)
+    assert mix.wind == 15
+    assert mix.corrected_negative_modes == {"wind"}
+
+
+def test_production_with_none():
+    mix = ProductionMix()
+    mix.add_value("wind", 10)
+    assert mix.wind == 10
+    mix.add_value("wind", None)
+    assert mix.wind == 10
+    assert mix.corrected_negative_modes == set()
+
+
+def test_production_with_nan():
+    mix = ProductionMix()
+    mix.add_value("wind", 10)
+    assert mix.wind == 10
+    mix.add_value("wind", math.nan)
+    assert mix.wind == 10
+    assert mix.corrected_negative_modes == set()
+
+
+def test_production_with_nan_using_numpy():
+    mix = ProductionMix()
+    mix.add_value("wind", 10)
+    assert mix.wind == 10
+    mix.add_value("wind", math.nan)
+    assert mix.wind == 10
+    assert mix.corrected_negative_modes == set()
+
+
+def test_production_with_nan_init():
+    mix = ProductionMix(wind=math.nan)
+    assert mix.wind is None
+
+
+def test_production_with_nan_using_numpy_init():
+    mix = ProductionMix(wind=math.nan)
+    assert mix.wind is None
+
+
+def test_storage():
+    mix = StorageMix()
+    mix.add_value("hydro", 10)
+    assert mix.hydro == 10
+    mix.add_value("hydro", 5)
+    assert mix.hydro == 15
+
+
+def test_storage_with_negative_value():
+    mix = StorageMix()
+    mix.add_value("hydro", 10)
+    assert mix.hydro == 10
+    mix.add_value("hydro", -5)
+    assert mix.hydro == 5
+
+
+def test_storage_with_none():
+    mix = StorageMix()
+    mix.add_value("hydro", None)
+    assert mix.hydro is None
+    mix.add_value("hydro", -5)
+    assert mix.hydro == -5
+    mix.add_value("hydro", None)
+    assert mix.hydro == -5
+
+
+def test_storage_with_nan():
+    mix = StorageMix()
+    mix.add_value("hydro", math.nan)
+    assert mix.hydro is None
+    mix.add_value("hydro", -5)
+    assert mix.hydro == -5
+    mix.add_value("hydro", math.nan)
+    assert mix.hydro == -5
+
+
+def test_storage_with_nan_using_numpy():
+    mix = StorageMix()
+    mix.add_value("hydro", math.nan)
+    assert mix.hydro is None
+    mix.add_value("hydro", -5)
+    assert mix.hydro == -5
+    mix.add_value("hydro", math.nan)
+    assert mix.hydro == -5
+
+
+def test_storage_with_nan_init():
+    mix = StorageMix(hydro=math.nan)
+    assert mix.hydro is None
+
+
+def test_storage_with_nan_using_numpy_init():
+    mix = StorageMix(hydro=math.nan)
+    assert mix.hydro is None
+
+
+def test_update_production():
+    mix = ProductionMix(wind=10, solar=20)
+    new_mix = ProductionMix(wind=5, solar=25)
+    final_mix = ProductionMix._update(mix, new_mix)
+    assert final_mix is not None
+    assert final_mix.wind == 5
+    assert final_mix.solar == 25
+
+
+def test_update_storage():
+    mix = StorageMix(hydro=10, battery=20)
+    new_mix = StorageMix(hydro=5, battery=25)
+    final_mix = StorageMix._update(mix, new_mix)
+    assert final_mix is not None
+    assert final_mix.hydro == 5
+    assert final_mix.battery == 25
+
+
+def test_update_production_with_none():
+    mix = ProductionMix(wind=10, solar=20)
+    new_mix = ProductionMix(wind=None, solar=25)
+    final_mix = ProductionMix._update(mix, new_mix)
+    assert final_mix is not None
+    assert final_mix.wind == 10
+    assert final_mix.solar == 25
+
+
+def test_update_storage_with_none():
+    mix = StorageMix(hydro=10, battery=20)
+    new_mix = StorageMix(hydro=None, battery=25)
+    final_mix = StorageMix._update(mix, new_mix)
+    assert final_mix is not None
+    assert final_mix.hydro == 10
+    assert final_mix.battery == 25
+
+
+def test_update_production_with_empty():
+    mix = ProductionMix()
+    new_mix = ProductionMix(wind=0, solar=25)
+    final_mix = ProductionMix._update(mix, new_mix)
+    assert final_mix is not None
+    assert final_mix.wind == 0
+    assert final_mix.solar == 25
+
+
+def test_update_storage_with_empty():
+    mix = StorageMix()
+    new_mix = StorageMix(hydro=0, battery=25)
+    final_mix = StorageMix._update(mix, new_mix)
+    assert final_mix is not None
+    assert final_mix.hydro == 0
+    assert final_mix.battery == 25
+
+
+def test_update_production_with_new_empty():
+    mix = ProductionMix(wind=10, solar=20)
+    new_mix = ProductionMix()
+    final_mix = ProductionMix._update(mix, new_mix)
+    assert final_mix is not None
+    assert final_mix.wind == 10
+    assert final_mix.solar == 20
+
+
+def test_update_storage_with_new_empty():
+    mix = StorageMix(hydro=10, battery=20)
+    new_mix = StorageMix()
+    final_mix = StorageMix._update(mix, new_mix)
+    assert final_mix is not None
+    assert final_mix.hydro == 10
+    assert final_mix.battery == 20
+
+
+def test_update_production_with_empty_and_new_none():
+    mix = ProductionMix()
+    new_mix = ProductionMix(wind=None, solar=None)
+    final_mix = ProductionMix._update(mix, new_mix)
+    assert final_mix is not None
+    assert final_mix.wind is None
+    assert final_mix.solar is None
+
+
+def test_update_storage_with_empty_and_new_none():
+    mix = StorageMix()
+    new_mix = StorageMix(hydro=None, battery=None)
+    final_mix = StorageMix._update(mix, new_mix)
+    assert final_mix is not None
+    assert final_mix.hydro is None
+    assert final_mix.battery is None
+
+
+def test_update_production_with_empty_and_new_empty():
+    mix = ProductionMix()
+    new_mix = ProductionMix()
+    final_mix = ProductionMix._update(mix, new_mix)
+    assert final_mix is not None
+    assert final_mix.wind is None
+    assert final_mix.solar is None
+
+
+def test_update_storage_with_empty_and_new_empty():
+    mix = StorageMix()
+    new_mix = StorageMix()
+    final_mix = StorageMix._update(mix, new_mix)
+    assert final_mix is not None
+    assert final_mix.hydro is None
+    assert final_mix.battery is None
+
+
+def test_create_exchange_capacity_forecast():
+    forecast = ExchangeCapacity(
+        zoneKey=ZoneKey("AT->DE"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        source="trust.me",
+        capacityExport=1000.0,
+        capacityImport=900.0,
+    )
+    assert forecast.zoneKey == ZoneKey("AT->DE")
+    assert forecast.datetime == datetime(2023, 1, 1, tzinfo=timezone.utc)
+    assert forecast.source == "trust.me"
+    assert forecast.capacityExport == 1000.0
+    assert forecast.capacityImport == 900.0
+    assert forecast.sourceType == EventSourceType.published
+
+
+def test_exchange_capacity_forecast_create_defaults_to_published():
+    logger = logging.Logger("test")
+    forecast = ExchangeCapacity.create(
+        logger=logger,
+        zoneKey=ZoneKey("AT->DE"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        end_datetime=None,
+        source="trust.me",
+        capacityExport=1000.0,
+        capacityImport=900.0,
+    )
+    assert forecast is not None
+    assert forecast.sourceType == EventSourceType.published
+
+
+def test_exchange_capacity_forecast_allows_one_none_capacity():
+    # One direction may be None as long as the other is set
+    forward_only = ExchangeCapacity(
+        zoneKey=ZoneKey("AT->DE"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        source="trust.me",
+        capacityExport=1000.0,
+        capacityImport=None,
+    )
+    assert forward_only.capacityExport == 1000.0
+    assert forward_only.capacityImport is None
+
+    reverse_only = ExchangeCapacity(
+        zoneKey=ZoneKey("AT->DE"),
+        datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        source="trust.me",
+        capacityExport=None,
+        capacityImport=900.0,
+    )
+    assert reverse_only.capacityExport is None
+    assert reverse_only.capacityImport == 900.0
+
+
+def test_raises_if_invalid_exchange_capacity_forecast():
+    # Missing timezone
+    with pytest.raises(ValueError):
+        ExchangeCapacity(
+            zoneKey=ZoneKey("AT->DE"),
+            datetime=datetime(2023, 1, 1),
+            source="trust.me",
+            capacityExport=1000.0,
+            capacityImport=900.0,
+        )
+
+    # Unsorted zone key
+    with pytest.raises(ValueError):
+        ExchangeCapacity(
+            zoneKey=ZoneKey("DE->AT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            source="trust.me",
+            capacityExport=1000.0,
+            capacityImport=900.0,
+        )
+
+    # Not an exchange key (no "->")
+    with pytest.raises(ValueError):
+        ExchangeCapacity(
+            zoneKey=ZoneKey("AT"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            source="trust.me",
+            capacityExport=1000.0,
+            capacityImport=900.0,
+        )
+
+    # Both capacities None
+    with pytest.raises(ValueError):
+        ExchangeCapacity(
+            zoneKey=ZoneKey("AT->DE"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            source="trust.me",
+            capacityExport=None,
+            capacityImport=None,
+        )
+
+    # Unknown zone key not in EXCHANGES_CONFIG
+    with pytest.raises(ValueError):
+        ExchangeCapacity(
+            zoneKey=ZoneKey("UNKNOWN->ZONE"),
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            source="trust.me",
+            capacityExport=1000.0,
+            capacityImport=900.0,
+        )
+
+
+def test_exchange_capacity_forecast_static_create_logs_error():
+    logger = logging.Logger("test")
+    with patch.object(logger, "error") as mock_error:
+        ExchangeCapacity.create(
+            logger=logger,
+            zoneKey=ZoneKey("DE->AT"),  # unsorted
+            datetime=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            end_datetime=None,
+            source="trust.me",
+            capacityExport=1000.0,
+            capacityImport=900.0,
+        )
+        mock_error.assert_called_once()
+
+
+@freezegun.freeze_time("2023-01-01")
+def test_exchange_capacity_forecast_allows_future_datetime():
+    # Forecasted events can be in the future
+    forecast = ExchangeCapacity(
+        zoneKey=ZoneKey("AT->DE"),
+        datetime=datetime(2023, 3, 1, tzinfo=timezone.utc),
+        source="trust.me",
+        capacityExport=1000.0,
+        capacityImport=900.0,
+        sourceType=EventSourceType.forecasted,
+    )
+    assert forecast.datetime == datetime(2023, 3, 1, tzinfo=timezone.utc)
+
+
+def test_exchange_capacity_forecast_to_dict():
+    dt = datetime(2023, 1, 1, tzinfo=timezone.utc)
+    forecast = ExchangeCapacity(
+        zoneKey=ZoneKey("AT->DE"),
+        datetime=dt,
+        source="trust.me",
+        capacityExport=1000.0,
+        capacityImport=900.0,
+    )
+    d = forecast.to_dict()
+    assert d["datetime"] == dt
+    assert d["sortedZoneKeys"] == ZoneKey("AT->DE")
+    assert d["capacityExport"] == 1000.0
+    assert d["capacityImport"] == 900.0
+    assert d["source"] == "trust.me"
+    assert d["sourceType"] == EventSourceType.published

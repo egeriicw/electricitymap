@@ -1,0 +1,43 @@
+bounding_box:
+  - - 144.65484654846549
+    - 13.246291513944627
+  - - 144.95364953649536
+    - 13.639839293008166
+capacity:
+  solar:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 40.0
+    - datetime: '2022-01-01'
+      source: Ember, Yearly electricity data
+      value: 100.0
+  unknown:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 490.0
+    - datetime: '2019-01-01'
+      source: Ember, Yearly electricity data
+      value: 420.0
+    - datetime: '2024-01-01'
+      source: Ember, Yearly electricity data
+      value: 440.0
+  wind:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 0.0
+center_point:
+  - 144.80424804248042
+  - 13.443065403476396
+centroid:
+  - 144.79344793447933
+  - 13.478126932883875
+country: GU
+country_name: Guam
+currency: USD
+has_day_ahead_price_license: false
+hide_day_ahead_price: false
+parsers:
+  productionCapacity: EMBER.fetch_production_capacity
+region: Oceania
+timezone: Pacific/Guam
+zone_name: Guam

@@ -1,0 +1,17 @@
+workflows:
+  - '.github/workflows/**/*.yml'
+
+config:
+  - 'config/**/*.yaml'
+
+markdown:
+  - '**.md'
+
+json:
+  - '**.json'
+
+python:
+  - '**.py'
+  - 'pyproject.toml'
+  - 'uv.lock'
+  - '.python-version'

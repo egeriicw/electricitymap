@@ -1,0 +1,10 @@
+capacity:
+  - -500
+  - 500
+lonlat:
+  - -5.428149
+  - 54.87826
+parsers:
+  exchange: SMARTGRIDDASHBOARD.fetch_exchange
+  exchangeCapacityForecastDayAhead: ENTSOE.fetch_exchange_capacity_forecasts_day_ahead
+rotation: -110

@@ -1,0 +1,10 @@
+capacity:
+  - -2500
+  - 2500
+lonlat:
+  - 136.42
+  - 35.04
+parsers:
+  exchange: occtonet.fetch_exchange
+  exchangeForecast: occtonet.fetch_exchange_forecast
+rotation: -90

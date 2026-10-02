@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+import json
+import urllib.parse
+from datetime import datetime, timedelta, timezone
+from itertools import pairwise
+from logging import Logger, getLogger
+from operator import itemgetter
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from requests import Response, Session
+
+from electricitymap.contrib.config import ZoneKey
+from electricitymap.contrib.lib.models.event_lists import (
+    DayAheadPriceList,
+    PriceList,
+    ProductionBreakdownList,
+    TotalConsumptionList,
+)
+from electricitymap.contrib.lib.models.events import ProductionMix
+from electricitymap.contrib.parsers.lib.config import refetch_frequency, use_proxy
+from electricitymap.contrib.parsers.lib.exceptions import ParserException
+from electricitymap.contrib.types import DayAheadAuction
+
+from .lib.utils import get_token, to_utc
+
+TR_TZ = ZoneInfo("Europe/Istanbul")
+
+EPIAS_MAIN_URL = "https://seffaflik.epias.com.tr/electricity-service/v1"
+KINDS_MAPPING = {
+    "production": {
+        "url": "generation/data/realtime-generation",
+    },
+    "consumption": {
+        "url": "consumption/data/realtime-consumption",
+    },
+    "price": {"url": "markets/dam/data/mcp"},
+}
+PRODUCTION_MAPPING = {
+    "biomass": ["biomass"],
+    "solar": ["sun"],
+    "geothermal": ["geothermal"],
+    "oil": ["fueloil", "gasOil", "naphta"],
+    "gas": ["naturalGas", "lng"],
+    "wind": ["wind"],
+    "coal": ["blackCoal", "asphaltiteCoal", "lignite", "importCoal"],
+    "hydro": ["river", "dammedHydro"],
+    "nuclear": ["nucklear"],
+    "unknown": ["wasteheat"],
+}
+INVERT_PRODUCTION_MAPPPING = {
+    val: mode for mode in PRODUCTION_MAPPING for val in PRODUCTION_MAPPING[mode]
+}
+IGNORED_KEYS = ["total", "date", "importExport", "hour"]
+SOURCE = "epias.com.tr"
+# EPİAŞ documents the MCP as an hourly price, and items only carry their start (`date`):
+# https://seffaflik.epias.com.tr/electricity-service/technical/en/index.html#_mcp-data
+_EPIAS_MCP_RESOLUTION = timedelta(hours=1)
+
+
+def fetch_ticket_TGT(session: Session) -> str:
+    url = "https://giris.epias.com.tr/cas/v1/tickets"
+
+    TR_USERNAME = urllib.parse.quote_plus(get_token("TR_USERNAME"))
+    TR_PASSWORD = urllib.parse.quote_plus(get_token("TR_PASSWORD"))
+
+    payload = f"username={TR_USERNAME}&password={TR_PASSWORD}"
+
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "text/plain",
+    }
+
+    response_TGT = session.request("POST", url, headers=headers, data=payload)
+
+    return response_TGT.text
+
+
+def fetch_data(target_datetime: datetime, kind: str, session: Session) -> list:
+    TGT_ticket = fetch_ticket_TGT(session)
+    url = "/".join((EPIAS_MAIN_URL, KINDS_MAPPING[kind]["url"]))
+
+    is_last_page = False
+    pagenum = 1
+    results = []
+
+    target_datetime = target_datetime.replace(tzinfo=TR_TZ)
+    # Fetch for the last 2 days since start and end date are truncated to the day and to avoid missing last hours.
+    while not is_last_page:
+        payload = json.dumps(
+            {
+                "startDate": (target_datetime - timedelta(days=1)).strftime(
+                    "%Y-%m-%dT%H:%M:%S+03:00"
+                ),
+                "endDate": (target_datetime).strftime("%Y-%m-%dT%H:%M:%S+03:00"),
+                "page": {
+                    "number": pagenum,
+                    "size": 48,
+                    "sort": {"field": "date", "direction": "ASC"},
+                },
+            }
+        )
+        headers = {
+            "TGT": TGT_ticket,
+            "Content-Type": "application/json",
+        }
+
+        r: Response = session.request("POST", url, headers=headers, data=payload)
+
+        if r.status_code == 200:
+            results += r.json()["items"]
+            pagenum += 1
+
+        else:
+            raise ParserException(
+                parser="TR.py",
+                message=f"{target_datetime}: {kind} data is not available for TR",
+            )
+
+        if r.json()["items"] == [] or pagenum > 20:
+            is_last_page = True
+
+    return results
+
+
+@refetch_frequency(timedelta(days=1))
+@use_proxy("TR")
+def fetch_production(
+    zone_key: ZoneKey = ZoneKey("TR"),
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
+    logger: Logger = getLogger(__name__),
+) -> list[dict[str, Any]]:
+    session = session or Session()
+
+    # For real-time data, the last data point seems to but continously updated thoughout the hour and will be excluded as not final
+    exclude_last_data_point = False
+    if target_datetime is None:
+        target_datetime = datetime.now(tz=TR_TZ)
+        exclude_last_data_point = True
+
+    data = fetch_data(
+        target_datetime=target_datetime, kind="production", session=session
+    )
+
+    # Sort the data by date
+    data = sorted(data, key=itemgetter("date"))
+
+    data = data[:-1] if exclude_last_data_point else data
+
+    production_breakdowns = ProductionBreakdownList(logger)
+    for item in data:
+        mix = ProductionMix()
+        for key, value in item.items():
+            if key in INVERT_PRODUCTION_MAPPPING:
+                mix.add_value(
+                    INVERT_PRODUCTION_MAPPPING[key],
+                    value,
+                    correct_negative_with_zero=True,
+                )
+            elif key not in IGNORED_KEYS:
+                logger.warning("Unrecognized key '%s' in data skipped", key)
+
+        date = str(item.get("date"))
+
+        production_breakdowns.append(
+            zoneKey=zone_key,
+            datetime=datetime.fromisoformat(date)
+            if "+" in date
+            else datetime.fromisoformat(date).replace(tzinfo=TR_TZ),
+            production=mix,
+            source=SOURCE,
+        )
+
+    return production_breakdowns.to_list()
+
+
+@refetch_frequency(timedelta(days=1))
+def fetch_consumption(
+    zone_key: ZoneKey = ZoneKey("TR"),
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
+    logger: Logger = getLogger(__name__),
+) -> list[dict[str, Any]]:
+    session = session or Session()
+
+    if target_datetime is None:
+        target_datetime = datetime.now(tz=TR_TZ).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
+    data = fetch_data(
+        target_datetime=target_datetime, kind="consumption", session=session
+    )
+
+    consumptions = TotalConsumptionList(logger)
+    for item in data:
+        consumptions.append(
+            zoneKey=zone_key,
+            datetime=datetime.fromisoformat(item.get("date")).replace(tzinfo=TR_TZ),
+            consumption=item.get("consumption"),
+            source=SOURCE,
+        )
+
+    return consumptions.to_list()
+
+
+@refetch_frequency(timedelta(days=1))
+def fetch_price(
+    zone_key: ZoneKey = ZoneKey("TR"),
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
+    logger: Logger = getLogger(__name__),
+) -> list[dict[str, Any]]:
+    session = session or Session()
+
+    if target_datetime is None:
+        target_datetime = datetime.now(tz=TR_TZ)
+
+    data = fetch_data(target_datetime=target_datetime, kind="price", session=session)
+    prices = PriceList(logger)
+    for item in data:
+        prices.append(
+            zoneKey=zone_key,
+            datetime=datetime.fromisoformat(item.get("date")).replace(tzinfo=TR_TZ),
+            price=item.get("price"),
+            source=SOURCE,
+            currency="TRY",
+        )
+
+    return prices.to_list()
+
+
+@refetch_frequency(timedelta(days=1))
+def fetch_price_day_ahead(
+    zone_key: ZoneKey = ZoneKey("TR"),
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
+    logger: Logger = getLogger(__name__),
+) -> list[dict[str, Any]]:
+    """EPİAŞ day-ahead market clearing prices (PTF) for `parser_data_price_day_ahead`.
+
+    Runs alongside `fetch_price`. `fetch_data` covers [target - 1 day, target], so a live
+    run targets tomorrow to get today plus tomorrow once the auction has cleared.
+    `target_datetime` is UTC (naive values are assumed UTC). TR time is only used for the
+    EPİAŞ request window, and rows are emitted in UTC.
+    """
+    session = session or Session()
+    target = to_utc(target_datetime)
+    if target_datetime is None:
+        target += timedelta(days=1)
+    # Convert (not relabel) to TR time, so `fetch_data`'s `.replace(tzinfo=TR_TZ)` is a no-op.
+    target = target.astimezone(TR_TZ)
+
+    data = fetch_data(target_datetime=target, kind="price", session=session)
+    starts = [
+        datetime.fromisoformat(item["date"])
+        .replace(tzinfo=TR_TZ)
+        .astimezone(timezone.utc)
+        for item in data
+    ]
+    # The response has no end or resolution, so check the spacing of the starts
+    # matches the documented resolution rather than trusting it blindly.
+    steps = {b - a for a, b in pairwise(sorted(starts))}
+    if starts and steps != {_EPIAS_MCP_RESOLUTION}:
+        raise ParserException(
+            parser="TR.py",
+            message=f"Expected {_EPIAS_MCP_RESOLUTION} MCP intervals, got {steps}",
+            zone_key=zone_key,
+        )
+
+    prices = DayAheadPriceList(logger)
+    for start, item in zip(starts, data, strict=True):
+        prices.append(
+            zoneKey=zone_key,
+            datetime=start,
+            end_datetime=start + _EPIAS_MCP_RESOLUTION,
+            price=item.get("price"),
+            currency="TRY",
+            auction=DayAheadAuction.EPIAS_DA,
+            source=SOURCE,
+        )
+    return prices.to_list()
+
+
+if __name__ == "__main__":
+    """Main method, never used by the Electricity Map backend, but handy for testing."""
+
+    print("fetch_production() ->")
+    print(fetch_production())
+    print("fetch_price() ->")
+    print(fetch_price())
+    print("fetch_consumption() ->")
+    print(fetch_consumption())

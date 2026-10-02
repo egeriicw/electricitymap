@@ -1,0 +1,44 @@
+bounding_box:
+  - - 88.73188731887316
+    - 26.69990122658588
+  - - 92.08352083520836
+    - 28.35852622998459
+capacity:
+  hydro:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 1610.0
+    - datetime: '2019-01-01'
+      source: Ember, Yearly electricity data
+      value: 2330.0
+    - datetime: '2024-01-01'
+      source: Ember, Yearly electricity data
+      value: 2450.0
+  solar:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 0.0
+  unknown:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 10.0
+  wind:
+    - datetime: '2017-01-01'
+      source: Ember, Yearly electricity data
+      value: 0.0
+center_point:
+  - 90.34152919009483
+  - 27.52220885550897
+centroid:
+  - 90.69287835735499
+  - 27.326960835907283
+country: BT
+country_name: Bhutan
+currency: BTN
+has_day_ahead_price_license: false
+hide_day_ahead_price: false
+parsers:
+  productionCapacity: EMBER.fetch_production_capacity
+region: Asia
+timezone: Asia/Thimphu
+zone_name: Bhutan

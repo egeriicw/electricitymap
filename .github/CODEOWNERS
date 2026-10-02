@@ -1,0 +1,5 @@
+# Codeowners file
+
+electricitymap/** @electricitymaps/parser
+config/** @electricitymaps/parser
+tests/** @electricitymaps/parser
